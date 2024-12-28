@@ -86,7 +86,7 @@
 <body>
     <div class="dashboard">
         <h1>Boom 1000 Live RSI Dashboard (15m)</h1>
-        <div id="connection-status">Connecting...</div>
+        <div id="connection-status" class="disconnected">Connecting...</div>
         <div id="rsi-value">Current RSI: --</div>
         <div id="chart-container">
             <canvas id="rsiChart"></canvas>
@@ -98,10 +98,11 @@
     </div>
 
     <script>
-        const APP_ID = '66800'; // Replace with your Deriv app ID
-        const SYMBOL = 'Boom 1000 Index';
-        const INTERVAL = 15; // 15 minutes
-        
+        const APP_ID = '66800';
+        const TOKEN = 'GXbNiJMJ93W0LX0';
+        const SYMBOL = 'BOOM1000';
+        const INTERVAL = 15; // 15-minute candles
+
         const ctx = document.getElementById('rsiChart').getContext('2d');
         const rsiValueElement = document.getElementById('rsi-value');
         const connectionStatus = document.getElementById('connection-status');
@@ -110,7 +111,6 @@
 
         let ws = null;
         let priceHistory = [];
-        let rsiHistory = [];
         let chartInstance = null;
 
         // Initialize Chart
@@ -159,14 +159,12 @@
             let gains = [];
             let losses = [];
 
-            // Calculate price changes and separate into gains and losses
             for (let i = 1; i < prices.length; i++) {
                 const change = prices[i] - prices[i - 1];
                 gains.push(change > 0 ? change : 0);
                 losses.push(change < 0 ? -change : 0);
             }
 
-            // Calculate average gain and loss
             const avgGain = gains.slice(-periods).reduce((sum, gain) => sum + gain, 0) / periods;
             const avgLoss = losses.slice(-periods).reduce((sum, loss) => sum + loss, 0) / periods;
 
@@ -174,7 +172,6 @@
                 return 100;
             }
 
-            // Calculate RSI
             const rs = avgGain / avgLoss;
             const rsi = 100 - (100 / (1 + rs));
 
@@ -184,12 +181,11 @@
         // Update Chart
         function updateChart(rsi, timestamp) {
             const time = new Date(timestamp).toLocaleTimeString();
-            
+
             chartInstance.data.labels.push(time);
             chartInstance.data.datasets[0].data.push(rsi);
 
-            // Keep only last 40 data points (10 hours of 15-minute data)
-            if (chartInstance.data.labels.length > 40) {
+            if (chartInstance.data.labels.length > 60) {
                 chartInstance.data.labels.shift();
                 chartInstance.data.datasets[0].data.shift();
             }
@@ -211,25 +207,28 @@
             }
         }
 
-        // Connect to Deriv WebSocket
+        // Connect to WebSocket
         function connect() {
-            ws = new WebSocket('wss://ws.binaryws.com/websockets/v3?app_id=' + APP_ID);
+            ws = new WebSocket(`wss://ws.binaryws.com/websockets/v3?app_id=${APP_ID}`);
 
             ws.onopen = function() {
                 connectionStatus.textContent = 'Connected';
                 connectionStatus.classList.add('connected');
                 connectionStatus.classList.remove('disconnected');
 
-                // Subscribe to Boom 1000 Index ticks
                 ws.send(JSON.stringify({
-                    "ticks_history": "BOOM1000",
+                    "authorize": TOKEN
+                }));
+
+                ws.send(JSON.stringify({
+                    "ticks_history": SYMBOL,
                     "adjust_start_time": 1,
                     "count": 5000,
                     "end": "latest",
                     "start": 1,
                     "style": "candles",
                     "subscribe": 1,
-                    "granularity": INTERVAL * 60 // Convert minutes to seconds
+                    "granularity": INTERVAL * 60
                 }));
             };
 
@@ -245,46 +244,44 @@
 
                 if (data.error) {
                     console.error('WebSocket error:', data.error.message);
+                    connectionStatus.textContent = `Error: ${data.error.message}`;
+                    connectionStatus.classList.add('disconnected');
                     return;
                 }
 
                 if (data.candles) {
-                    // Process historical data
                     priceHistory = data.candles.map(candle => parseFloat(candle.close));
                     const rsi = calculateRSI(priceHistory);
                     if (rsi !== null) {
-                        rsiHistory.push(rsi);
-                        rsiValueElement.textContent = `Current RSI: ${rsi.toFixed(2)}`;
-                        updateSignals(rsi);
+                        rsiValueElement.textContent = `Current RSI: ${                    rsi.toFixed(2)}`;
                         updateChart(rsi, data.candles[data.candles.length - 1].epoch * 1000);
+                        updateSignals(rsi);
                     }
                 }
 
-                if (data.ohlc) {
-                    // Process real-time updates
-                    const price = parseFloat(data.ohlc.close);
-                    priceHistory.push(price);
+                if (data.tick) {
+                    const newPrice = parseFloat(data.tick.quote);
+                    priceHistory.push(newPrice);
+
+                    if (priceHistory.length > 5000) {
+                        priceHistory.shift();
+                    }
+
                     const rsi = calculateRSI(priceHistory);
                     if (rsi !== null) {
-                        rsiHistory.push(rsi);
                         rsiValueElement.textContent = `Current RSI: ${rsi.toFixed(2)}`;
+                        updateChart(rsi, data.tick.epoch * 1000);
                         updateSignals(rsi);
-                        updateChart(rsi, data.ohlc.epoch * 1000);
                     }
                 }
             };
         }
 
-        // Initialize
-        initChart();
-        connect();
-
-        // Cleanup on page unload
-        window.addEventListener('beforeunload', function() {
-            if (ws) {
-                ws.close();
-            }
-        });
+        // Initialize the Dashboard
+        window.onload = function() {
+            initChart();
+            connect();
+        };
     </script>
 </body>
 </html>
